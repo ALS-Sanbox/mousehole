@@ -8,6 +8,8 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 dependencies {
+    // AUSBC CameraActivity inherits from AppCompatActivity.
+    implementation("androidx.appcompat:appcompat:1.7.1")
     // JitPack master snapshot is a moving dependency. Pin a tested release before production.
     implementation("com.github.ernestp.AndroidUSBCamera:libausbc:master-SNAPSHOT")
 }

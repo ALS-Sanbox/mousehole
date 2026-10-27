@@ -20,7 +20,7 @@ The preview is initially requested at **1280 × 720**. 2K is **not** guaranteed;
 ## Build an APK with GitHub Actions (no Android Studio required)
 
 1. Open your GitHub repository: https://github.com/ALS-Sanbox/mousehole
-2. Download and extract the `MouseHole_Android_GitHub.zip` file. Its contents include `app`, `.github`, `build.gradle.kts`, and `settings.gradle.kts`.
+2. Download and extract the latest `MouseHole_Kotlin_2_2_Fix.zip` file. Its contents include `app`, `.github`, `build.gradle.kts`, and `settings.gradle.kts`.
 3. Upload **the contents**, not the enclosing directory, to the repository using **Add file → Upload files**. GitHub's web uploader may not preserve empty folders; this is fine. Make sure `.github/workflows/android-apk.yml` exists in the uploaded repository. If the web uploader ignores dot-prefixed paths, use GitHub's **Create new file** with the exact name `.github/workflows/android-apk.yml` and paste the YAML from the ZIP.
 4. Commit the changes to the `main` branch. The workflow should run automatically on push. Or visit **Actions → Build Mouse Hole APK → Run workflow**.
 5. Open **Actions**, select the newest workflow run and inspect the **Build debug APK** step. A green check means the APK compiled.
@@ -56,3 +56,7 @@ This revision uses AGP 8.10.1, Gradle 8.11.1, compileSdk 36, and installs
 Android SDK Platform 36 in GitHub Actions. targetSdk remains 35.
 This is a configuration correction, not a verified successful APK build.
 If another step fails, download the Actions log and review the first error.
+
+## Kotlin compiler alignment (October 2026)
+
+The AUSBC `master-SNAPSHOT` binaries currently report Kotlin metadata version 2.2.0. This project now uses Kotlin Gradle Plugin **2.2.10**, alongside Android Gradle Plugin 8.10.1 and Gradle 8.11.1, to correct the metadata mismatch observed in GitHub Actions. If the next run fails at Kotlin compilation, inspect the **first explicit source error**, because there may be separate AUSBC API incompatibilities; this package has not been compiled/tested here.
