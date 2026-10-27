@@ -1,6 +1,8 @@
 # Mouse Hole — USB-C Endoscope for Samsung Galaxy S23
 
-![Mouse Hole logo](mouse-hole-logo.png)
+![Mouse Hole app icon — mouse and illuminated inspection camera](mouse-hole-logo.png)
+
+**Branding:** The launcher icon uses the text-free Mouse Hole logo provided by the project owner. Android displays **Mouse Hole** as the application label beneath the icon.
 
 **Experimental Android UVC camera app.** Designed for the Samsung Galaxy S23 and a Nimborial USB-C endoscope, assuming the endoscope uses the standard USB Video Class (UVC) interface. The specific camera has **not** been verified.
 
