@@ -46,3 +46,13 @@ The app uses [AUSBC / AndroidUSBCamera](https://github.com/ernestp/AndroidUSBCam
 ## Build locally (optional)
 
 Install JDK 17, Android SDK Platform 35 and build tools, and Gradle 8.9. Run `gradle :app:assembleDebug`. The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+
+
+## AAR metadata build fix (October 2026)
+
+The initial GitHub Actions build failed because androidx.core:core-ktx:1.18.0
+requires Android compile SDK 36 and Android Gradle Plugin 8.9.1 or newer.
+This revision uses AGP 8.10.1, Gradle 8.11.1, compileSdk 36, and installs
+Android SDK Platform 36 in GitHub Actions. targetSdk remains 35.
+This is a configuration correction, not a verified successful APK build.
+If another step fails, download the Actions log and review the first error.
