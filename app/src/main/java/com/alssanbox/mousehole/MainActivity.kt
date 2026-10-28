@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbManager
 import android.os.Bundle
+import android.util.Log
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.LayoutInflater
@@ -35,6 +36,25 @@ class MainActivity : CameraActivity() {
     private lateinit var recordButton: Button
     private var recording = false
     private var currentVideo: File? = null
+    private val modes = listOf(
+        Triple(640, 480, CameraRequest.PreviewFormat.FORMAT_MJPEG),
+        Triple(640, 480, CameraRequest.PreviewFormat.FORMAT_YUYV),
+        Triple(1280, 720, CameraRequest.PreviewFormat.FORMAT_MJPEG)
+    )
+    private val modeIndex: Int
+        get() = getSharedPreferences("camera", MODE_PRIVATE).getInt("modeIndex", 0).coerceIn(modes.indices)
+    private fun modeDescription(): String {
+        val (w, h, format) = modes[modeIndex]
+        return "${w}x${h} ${if (format == CameraRequest.PreviewFormat.FORMAT_MJPEG) "MJPEG" else "YUYV"}"
+    }
+    private fun nextMode() {
+        if (recording) { toast("Stop recording before changing mode"); return }
+        getSharedPreferences("camera", MODE_PRIVATE).edit()
+            .putInt("modeIndex", (modeIndex + 1) % modes.size).apply()
+        toast("Next mode: ${modeDescription()}. Restarting USB preview")
+        // CameraActivity unregisters and re-registers USB monitor during Activity lifecycle.
+        recreate()
+    }
     
     private val callback = object : ICaptureCallBack {
         override fun onBegin() { runOnUiThread { status.text = "Capture started" } }
@@ -62,7 +82,7 @@ class MainActivity : CameraActivity() {
     }
     override fun getRootView(layoutInflater: LayoutInflater): View {
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xff101216.toInt()) }
-        status = TextView(this).apply { text = "Connect the USB-C endoscope"; setTextColor(-1); setPadding(18,18,18,18) }
+        status = TextView(this).apply { text = "Mode: ${modeDescription()} — connect USB-C endoscope"; setTextColor(-1); setPadding(18,18,18,18) }
         root.addView(status)
         preview = AspectRatioTextureView(this)
         previewFrame = FrameLayout(this)
@@ -74,22 +94,34 @@ class MainActivity : CameraActivity() {
         btn("USB INFO") { showUsbDevices() }
         btn("SIZES") { showSizes() }
         root.addView(controls)
+        // Keep the diagnostic mode control visible on narrower devices such as the Galaxy A16.
+        root.addView(Button(this).apply {
+            text = "CHANGE CAMERA MODE (${modeDescription()})"
+            setOnClickListener { nextMode() }
+        })
         return root
     }
     override fun getCameraView(): IAspectRatio? = preview
     override fun getCameraViewContainer(): ViewGroup? = previewFrame
     override fun getGravity(): Int = Gravity.CENTER
     override fun onCameraState(self: ICamera, code: ICameraStateCallBack.State, msg: String?) {
-        runOnUiThread { status.text = "USB camera: $code ${msg ?: ""}" }
+        Log.i("MouseHoleUVC", "State=$code mode=${modeDescription()} details=${msg ?: ""}")
+        runOnUiThread {
+            status.text = "${modeDescription()} — USB camera: $code ${msg ?: ""}"
+        }
     }
-    override fun getCameraRequest(): CameraRequest = CameraRequest.Builder()
-        .setPreviewWidth(1280).setPreviewHeight(720)
+    override fun getCameraRequest(): CameraRequest {
+        val (w, h, format) = modes[modeIndex]
+        Log.i("MouseHoleUVC", "Opening requested mode ${modeDescription()}")
+        return CameraRequest.Builder()
+        .setPreviewWidth(w).setPreviewHeight(h)
         .setRenderMode(CameraRequest.RenderMode.OPENGL)
         .setDefaultRotateType(RotateType.ANGLE_0)
         .setAudioSource(if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)
             CameraRequest.AudioSource.SOURCE_SYS_MIC else CameraRequest.AudioSource.NONE)
-        .setPreviewFormat(CameraRequest.PreviewFormat.FORMAT_MJPEG)
+        .setPreviewFormat(format)
         .create()
+    }
     private fun toggleRecord() {
         if (recording) {
             captureVideoStop(); recording = false; recordButton.text = "RECORD"

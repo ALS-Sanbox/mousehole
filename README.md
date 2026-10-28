@@ -1,3 +1,5 @@
+> **Diagnostic preview build:** Read [BLACK_PREVIEW_TEST.md](BLACK_PREVIEW_TEST.md) for the new MODE selector and black-preview testing instructions.
+
 # Mouse Hole — USB-C Endoscope for Samsung Galaxy S23
 
 ![Mouse Hole app icon — mouse and illuminated inspection camera](mouse-hole-logo.png)
