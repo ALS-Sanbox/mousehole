@@ -54,6 +54,50 @@ class MainActivity : CameraActivity() {
     private lateinit var controlsPanel: LinearLayout
     private lateinit var refreshButton: Button
     private lateinit var shutterButton: Button
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private var uiVisible = true
+    private var zoomLevel = 1.0f
+    private var zoomText: TextView? = null
+    private val hideUiRunnable = Runnable {
+        if (!isFinishing && !isDestroyed && ::root.isInitialized) {
+            root.visibility = View.GONE
+            uiVisible = false
+        }
+    }
+    private fun showOverlay() {
+        if (!::root.isInitialized) return
+        root.visibility = View.VISIBLE
+        uiVisible = true
+        uiHandler.removeCallbacks(hideUiRunnable)
+        uiHandler.postDelayed(hideUiRunnable, 4500L)
+    }
+    private fun toggleOverlay() {
+        if (uiVisible) {
+            uiHandler.removeCallbacks(hideUiRunnable)
+            root.visibility = View.GONE
+            uiVisible = false
+        } else showOverlay()
+    }
+    private fun applyPreviewCrop() {
+        if (!::preview.isInitialized || !::previewFrame.isInitialized) return
+        preview.post {
+            if (preview.width <= 0 || preview.height <= 0 || previewFrame.width <= 0 || previewFrame.height <= 0) return@post
+            val scale = maxOf(
+                previewFrame.width.toFloat() / preview.width,
+                previewFrame.height.toFloat() / preview.height
+            ) * zoomLevel
+            preview.pivotX = preview.width / 2f
+            preview.pivotY = preview.height / 2f
+            preview.scaleX = scale
+            preview.scaleY = scale
+        }
+    }
+    private fun changeZoom(delta: Float) {
+        zoomLevel = (zoomLevel + delta).coerceIn(1f, 3f)
+        zoomText?.text = "%.1fx".format(zoomLevel)
+        applyPreviewCrop()
+        showOverlay()
+    }
     private var videoMode = false
     private val timerHandler = Handler(Looper.getMainLooper())
     private var recordStartedAt = 0L
@@ -68,7 +112,28 @@ class MainActivity : CameraActivity() {
     private var recording = false
     private var currentVideo: File? = null
     // The supplied endoscope works in YUYV; never request an unsupported MJPEG mode.
-    private fun modeDescription() = "640x480 YUYV"
+    private val highQuality: Boolean
+        get() = getSharedPreferences("camera", MODE_PRIVATE).getBoolean("tryHdYuyv", false)
+    private fun modeDescription() = if (highQuality) "1280x720 YUYV (trial)" else "640x480 YUYV"
+    private fun tryHigherQuality() {
+        if (recording) { toast("Stop recording before changing resolution"); return }
+        val sizes = getAllPreviewSizes()
+        val hasHD = sizes?.any { it.toString().contains("1280") && it.toString().contains("720") } == true
+        if (!hasHD) {
+            showDetails("YUYV resolution", "1280×720 is not in the reported sizes. Keeping tested 640×480 YUYV.")
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Experimental HD YUYV")
+            .setMessage("The camera reports 1280×720, but this may only work with MJPEG. Try HD YUYV? If it fails, the app returns to 640×480.")
+            .setPositiveButton("Try HD") { _, _ ->
+                getSharedPreferences("camera", MODE_PRIVATE).edit().putBoolean("tryHdYuyv", true).apply()
+                scheduleReconnect(200L)
+            }.setNegativeButton("Cancel", null).show()
+    }
+    private fun useStableQuality() {
+        getSharedPreferences("camera", MODE_PRIVATE).edit().putBoolean("tryHdYuyv", false).apply()
+        scheduleReconnect(200L)
+    }
     private val usbManager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private var receiverRegistered = false
     private var lastReconnectAt = 0L
@@ -161,7 +226,7 @@ class MainActivity : CameraActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) immersive()
+        if (hasFocus) { immersive(); showOverlay() }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -192,13 +257,13 @@ class MainActivity : CameraActivity() {
             minimumHeight = 0
             minWidth = 0
             minimumWidth = 0
-            setOnClickListener { action() }
+            setOnClickListener { showOverlay(); action() }
         }
 
     private fun showTools() {
         val items = arrayOf(
             "USB devices", "Reported preview sizes", "Reconnect camera",
-            "Microphone information"
+            "Try higher YUYV resolution", "Use stable 640×480 YUYV", "Microphone information"
         )
         AlertDialog.Builder(this)
             .setTitle("Mouse Hole • Camera tools")
@@ -207,7 +272,9 @@ class MainActivity : CameraActivity() {
                     0 -> showUsbDevices()
                     1 -> showSizes()
                     2 -> scheduleReconnect(200L)
-                    3 -> showDetails("Microphone", "Optional audio requires microphone permission before connecting the camera. Without it, MP4 recording is silent.")
+                    3 -> tryHigherQuality()
+                    4 -> useStableQuality()
+                    5 -> showDetails("Microphone", "Optional audio requires microphone permission before connecting the camera. Without it, MP4 recording is silent.")
                 }
             }
             .setNegativeButton("Close", null)
@@ -248,118 +315,107 @@ class MainActivity : CameraActivity() {
     }
 
 
-    override fun getRootView(layoutInflater: LayoutInflater): View {
-        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val margin = if (landscape) 6 else 10
-        val headerHeight = if (landscape) 35 else 47
-        val tabHeight = if (landscape) 34 else 46
-        val shutterHeight = if (landscape) 42 else 66
-        val shutterWidth = if (landscape) 94 else 130
 
-        // Full-window camera layer; all controls float over the live picture.
-        val screen = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+    override fun getRootView(layoutInflater: LayoutInflater): View {
+        val screen = FrameLayout(this).apply { setBackgroundColor(Color.BLACK); clipChildren = true }
         preview = AspectRatioTextureView(this)
         previewFrame = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             clipChildren = true
+            setOnClickListener { toggleOverlay() }
         }
         screen.addView(previewFrame, FrameLayout.LayoutParams(-1, -1))
+        previewFrame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyPreviewCrop() }
+        preview.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyPreviewCrop() }
 
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(margin), dp(margin), dp(margin), dp(margin))
+            setPadding(dp(10), dp(6), dp(10), dp(7))
+            setOnClickListener { toggleOverlay() }
         }
         screen.addView(root, FrameLayout.LayoutParams(-1, -1))
 
         val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = rounded(Color.argb(188, 5, 13, 26), cyan, 16)
-            setPadding(dp(8), 0, dp(8), 0)
+            orientation = LinearLayout.HORIZONTAL
         }
         header.addView(TextView(this).apply {
-            text = "Mouse Hole  •  YUYV"
+            text = "Mouse Hole"
+            textSize = 17f
             setTextColor(cyan)
             setTypeface(null, Typeface.BOLD)
-            textSize = if (landscape) 13f else 19f
-            maxLines = 1
-        }, LinearLayout.LayoutParams(0, -1, 1f))
-        refreshButton = smallButton("↻  Refresh") { scheduleReconnect(150L) }.apply {
-            textSize = if (landscape) 10f else 11f
-        }
-        header.addView(refreshButton, LinearLayout.LayoutParams(dp(if (landscape) 80 else 96), dp(headerHeight - 7)))
-        header.addView(smallButton("⚙") { showTools() }, LinearLayout.LayoutParams(dp(if (landscape) 40 else 48), dp(headerHeight - 7)).apply {
-            marginStart = dp(5)
-        })
-        root.addView(header, LinearLayout.LayoutParams(-1, dp(headerHeight)))
-
+            setShadowLayer(4f, 0f, 2f, Color.BLACK)
+        }, LinearLayout.LayoutParams(0, dp(40), 1f))
         status = TextView(this).apply {
-            text = "USB disconnected  •  ${modeDescription()}"
+            text = "USB • ${modeDescription()}"
+            maxLines = 1
+            textSize = 10f
             setTextColor(Color.WHITE)
-            textSize = if (landscape) 10f else 12f
-            maxLines = 2
-            gravity = Gravity.CENTER_VERTICAL
-            background = rounded(Color.argb(176, 5, 13, 26), radius = 9)
+            background = rounded(Color.argb(170, 5, 13, 26), radius = 13)
+            gravity = Gravity.CENTER
             setPadding(dp(8), 0, dp(8), 0)
         }
-        root.addView(status, LinearLayout.LayoutParams(-1, dp(if (landscape) 23 else 32)).apply {
-            topMargin = dp(3)
-        })
-
-        // This flexible spacer keeps controls on the bottom without shrinking the video surface.
+        header.addView(status, LinearLayout.LayoutParams(0, dp(31), 1.1f))
+        header.addView(smallButton("↻") { scheduleReconnect(150L) },
+            LinearLayout.LayoutParams(dp(44), dp(38)).apply { marginStart = dp(6) })
+        header.addView(smallButton("⚙") { showTools() },
+            LinearLayout.LayoutParams(dp(44), dp(38)).apply { marginStart = dp(6) })
+        root.addView(header, LinearLayout.LayoutParams(-1, dp(42)))
         root.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
 
-        controlsPanel = LinearLayout(this).apply {
-            orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = rounded(Color.argb(202, 5, 16, 32), cyan, 18)
-            setPadding(dp(if (landscape) 7 else 10), dp(if (landscape) 4 else 9),
-                dp(if (landscape) 7 else 10), dp(if (landscape) 4 else 9))
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(9), dp(5), dp(9), dp(5))
+            background = rounded(Color.argb(165, 5, 13, 26), cyan, 25)
         }
         val tabs = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
         }
-        val photoTab = smallButton("Photo") {
+        val photoTab = smallButton("◉ Photo") {
             if (!recording) { videoMode = false; refreshShutter() }
         }
-        recordButton = smallButton("Video") {
+        recordButton = smallButton("▣ Video") {
             if (!recording) { videoMode = true; refreshShutter() }
         }
-        val galleryTab = smallButton("Gallery") { openGallery() }
+        val galleryTab = smallButton("▧ Gallery") { openGallery() }
         for (tab in listOf(photoTab, recordButton, galleryTab)) {
-            tab.textSize = if (landscape) 10f else 11f
-            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(tabHeight), 1f).apply {
+            tab.textSize = 11f
+            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(39), 1f).apply {
                 marginStart = dp(2); marginEnd = dp(2)
             })
         }
-        if (landscape) {
-            controlsPanel.addView(tabs, LinearLayout.LayoutParams(0, dp(tabHeight), 1f))
-        } else {
-            controlsPanel.addView(tabs, LinearLayout.LayoutParams(-1, dp(tabHeight)))
+        bottom.addView(tabs, LinearLayout.LayoutParams(0, dp(42), 1.2f))
+        val zoomStrip = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            background = rounded(Color.argb(205, 5, 13, 26), cyan, 20)
         }
+        zoomStrip.addView(smallButton("−") { changeZoom(-0.25f) }, LinearLayout.LayoutParams(dp(34), dp(35)))
+        zoomText = TextView(this).apply {
+            text = "1.0x"
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            gravity = Gravity.CENTER
+        }
+        zoomStrip.addView(zoomText, LinearLayout.LayoutParams(dp(42), dp(35)))
+        zoomStrip.addView(smallButton("+") { changeZoom(0.25f) }, LinearLayout.LayoutParams(dp(34), dp(35)))
+        bottom.addView(zoomStrip, LinearLayout.LayoutParams(-2, dp(38)).apply { marginStart = dp(8) })
         shutterButton = Button(this).apply {
             isAllCaps = false
-            textSize = if (landscape) 12f else 17f
+            textSize = 12f
             setTypeface(null, Typeface.BOLD)
-            minHeight = 0
-            minimumHeight = 0
-            minWidth = 0
-            minimumWidth = 0
-            setOnClickListener { if (recording || videoMode) toggleRecord() else capturePhoto() }
+            minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0
+            setOnClickListener {
+                showOverlay()
+                if (recording || videoMode) toggleRecord() else capturePhoto()
+            }
         }
-        if (landscape) {
-            controlsPanel.addView(shutterButton, LinearLayout.LayoutParams(dp(shutterWidth), dp(shutterHeight)).apply {
-                marginStart = dp(8)
-            })
-            root.addView(controlsPanel, LinearLayout.LayoutParams(-1, dp(53)))
-        } else {
-            controlsPanel.addView(shutterButton, LinearLayout.LayoutParams(dp(shutterWidth), dp(shutterHeight)).apply {
-                topMargin = dp(7)
-            })
-            root.addView(controlsPanel, LinearLayout.LayoutParams(-1, dp(143)))
-        }
+        bottom.addView(shutterButton, LinearLayout.LayoutParams(dp(95), dp(44)).apply { marginStart = dp(9) })
+        controlsPanel = bottom
+        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(56)))
         refreshShutter()
+        showOverlay()
         return screen
     }
     override fun getCameraView(): IAspectRatio? = preview
@@ -368,12 +424,19 @@ class MainActivity : CameraActivity() {
     override fun onCameraState(self: ICamera, code: ICameraStateCallBack.State, msg: String?) {
         Log.i("MouseHoleUVC", "State=$code mode=${modeDescription()} details=${msg ?: ""}")
         runOnUiThread {
-            status.text = "${modeDescription()} — USB camera: $code ${msg ?: ""}"
+            if (!::status.isInitialized) return@runOnUiThread
+            status.text = "${modeDescription()} • USB: $code ${msg ?: ""}"
+            if (highQuality && (code.toString().contains("ERROR", true) || code.toString().contains("CLOSED", true))) {
+                getSharedPreferences("camera", MODE_PRIVATE).edit().putBoolean("tryHdYuyv", false).apply()
+                scheduleReconnect(500L)
+            } else if (code.toString().contains("OPENED", true)) {
+                applyPreviewCrop()
+            }
         }
     }
     override fun getCameraRequest(): CameraRequest {
-        val w = 640
-        val h = 480
+        val w = if (highQuality) 1280 else 640
+        val h = if (highQuality) 720 else 480
         val format = CameraRequest.PreviewFormat.FORMAT_YUYV
         Log.i("MouseHoleUVC", "Opening requested mode ${modeDescription()}")
         return CameraRequest.Builder()
@@ -432,6 +495,7 @@ class MainActivity : CameraActivity() {
     private fun toast(s:String)=Toast.makeText(this,s,Toast.LENGTH_SHORT).show()
     override fun onDestroy() {
         activityStopping = true
+        uiHandler.removeCallbacks(hideUiRunnable)
         reconnectHandler.removeCallbacks(reconnectAction)
         if (receiverRegistered) {
             try { unregisterReceiver(usbEvents) } catch (_: IllegalArgumentException) { }
@@ -440,6 +504,7 @@ class MainActivity : CameraActivity() {
         super.onDestroy()
     }
     override fun onPause() {
+        uiHandler.removeCallbacks(hideUiRunnable)
         if(recording) { captureVideoStop();recording=false;timerHandler.removeCallbacks(ticker);refreshShutter() }
         super.onPause()
     }
