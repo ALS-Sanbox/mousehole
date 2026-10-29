@@ -173,7 +173,7 @@ class MainActivity : CameraActivity() {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbEvents, filter, Context.RECEIVER_NOT_EXPORTED)
-        else @Suppress("DEPRECATION") registerReceiver(usbEvents, filter)
+        else registerReceiver(usbEvents, filter)
         receiverRegistered = true
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 1)
