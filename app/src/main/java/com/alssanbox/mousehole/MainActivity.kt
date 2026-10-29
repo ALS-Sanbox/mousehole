@@ -3,6 +3,13 @@ package com.alssanbox.mousehole
 import android.Manifest
 import android.content.ContentValues
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.content.res.Configuration
+import android.os.Build
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Typeface
@@ -44,6 +51,8 @@ class MainActivity : CameraActivity() {
     private lateinit var preview: AspectRatioTextureView
     private lateinit var status: TextView
     private lateinit var recordButton: Button
+    private lateinit var controlsPanel: LinearLayout
+    private lateinit var refreshButton: Button
     private lateinit var shutterButton: Button
     private var videoMode = false
     private val timerHandler = Handler(Looper.getMainLooper())
@@ -58,26 +67,60 @@ class MainActivity : CameraActivity() {
     }
     private var recording = false
     private var currentVideo: File? = null
-    private val modes = listOf(
-        Triple(640, 480, CameraRequest.PreviewFormat.FORMAT_MJPEG),
-        Triple(640, 480, CameraRequest.PreviewFormat.FORMAT_YUYV),
-        Triple(1280, 720, CameraRequest.PreviewFormat.FORMAT_MJPEG)
-    )
-    private val modeIndex: Int
-        get() = getSharedPreferences("camera", MODE_PRIVATE).getInt("modeIndex", 0).coerceIn(modes.indices)
-    private fun modeDescription(): String {
-        val (w, h, format) = modes[modeIndex]
-        return "${w}x${h} ${if (format == CameraRequest.PreviewFormat.FORMAT_MJPEG) "MJPEG" else "YUYV"}"
-    }
-    private fun nextMode() {
-        if (recording) { toast("Stop recording before changing mode"); return }
-        getSharedPreferences("camera", MODE_PRIVATE).edit()
-            .putInt("modeIndex", (modeIndex + 1) % modes.size).apply()
-        toast("Next mode: ${modeDescription()}. Restarting USB preview")
-        // CameraActivity unregisters and re-registers USB monitor during Activity lifecycle.
+    // The supplied endoscope works in YUYV; never request an unsupported MJPEG mode.
+    private fun modeDescription() = "640x480 YUYV"
+    private val usbManager by lazy { getSystemService(USB_SERVICE) as UsbManager }
+    private var receiverRegistered = false
+    private var lastReconnectAt = 0L
+    private var reconnectPending = false
+    private var activityStopping = false
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private val reconnectAction = Runnable {
+        reconnectPending = false
+        if (activityStopping || isFinishing || isDestroyed) return@Runnable
+        if (usbManager.deviceList.isEmpty()) {
+            if (::status.isInitialized) status.text = "USB disconnected • Connect your endoscope"
+            return@Runnable
+        }
+        // A new Activity gives CameraActivity/AUSBC a clean monitor and camera session.
+        if (recording) stopRecordingForDisconnect()
+        lastReconnectAt = SystemClock.elapsedRealtime()
         recreate()
     }
-    
+    private val usbEvents = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    if (recording) stopRecordingForDisconnect()
+                    if (::status.isInitialized) status.text = "USB disconnected • Waiting to reconnect"
+                    // A pending reconnect must not run against a detached device.
+                    reconnectHandler.removeCallbacks(reconnectAction)
+                    reconnectPending = false
+                }
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> scheduleReconnect(1000L)
+            }
+        }
+    }
+    private fun stopRecordingForDisconnect() {
+        if (!recording) return
+        recording = false
+        timerHandler.removeCallbacks(ticker)
+        // AUSBC may have already torn down its native capture on detach.
+        try { captureVideoStop() } catch (error: Exception) {
+            Log.w("MouseHoleUVC", "Could not finalize recording after USB disconnect", error)
+        }
+        refreshShutter()
+    }
+    private fun scheduleReconnect(delayMillis: Long = 650L) {
+        if (activityStopping || isFinishing || isDestroyed) return
+        val elapsed = SystemClock.elapsedRealtime() - lastReconnectAt
+        if (elapsed in 0..1500 && reconnectPending) return
+        reconnectHandler.removeCallbacks(reconnectAction)
+        reconnectPending = true
+        if (::status.isInitialized) status.text = "Reconnecting USB camera..."
+        reconnectHandler.postDelayed(reconnectAction, delayMillis)
+    }
+
     private val callback = object : ICaptureCallBack {
         override fun onBegin() { runOnUiThread { status.text = "Capture started" } }
         override fun onError(error: String?) { runOnUiThread { status.text = "Capture error: ${error ?: "unknown"}" } }
@@ -125,6 +168,13 @@ class MainActivity : CameraActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         immersive()
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbEvents, filter, Context.RECEIVER_NOT_EXPORTED)
+        else @Suppress("DEPRECATION") registerReceiver(usbEvents, filter)
+        receiverRegistered = true
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 1)
         }
@@ -147,7 +197,7 @@ class MainActivity : CameraActivity() {
 
     private fun showTools() {
         val items = arrayOf(
-            "USB devices", "Reported preview sizes", "Change camera mode (${modeDescription()})",
+            "USB devices", "Reported preview sizes", "Reconnect camera",
             "Microphone information"
         )
         AlertDialog.Builder(this)
@@ -156,7 +206,7 @@ class MainActivity : CameraActivity() {
                 when (which) {
                     0 -> showUsbDevices()
                     1 -> showSizes()
-                    2 -> nextMode()
+                    2 -> scheduleReconnect(200L)
                     3 -> showDetails("Microphone", "Optional audio requires microphone permission before connecting the camera. Without it, MP4 recording is silent.")
                 }
             }
@@ -197,82 +247,120 @@ class MainActivity : CameraActivity() {
         catch (e: Exception) { toast("No gallery app available") }
     }
 
+
     override fun getRootView(layoutInflater: LayoutInflater): View {
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(navy)
-            // Insets are handled by immersive transient bars; controls stay in the app's layout.
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-        }
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        header.addView(TextView(this).apply {
-            text = "Mouse Hole"
-            setTextColor(cyan)
-            setTypeface(null, Typeface.BOLD)
-            textSize = 23f
-        }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        header.addView(smallButton("⚙  TOOLS") { showTools() },
-            LinearLayout.LayoutParams(dp(100), dp(42)))
-        root.addView(header)
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val margin = if (landscape) 6 else 10
+        val headerHeight = if (landscape) 35 else 47
+        val tabHeight = if (landscape) 34 else 46
+        val shutterHeight = if (landscape) 42 else 66
+        val shutterWidth = if (landscape) 94 else 130
 
-        status = TextView(this).apply {
-            text = "USB disconnected  •  ${modeDescription()}"
-            setTextColor(Color.rgb(180, 210, 231))
-            textSize = 12f
-            maxLines = 2
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), 0, dp(4), dp(5))
-        }
-        root.addView(status, LinearLayout.LayoutParams(-1, dp(39)))
-
+        // Full-window camera layer; all controls float over the live picture.
+        val screen = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         preview = AspectRatioTextureView(this)
         previewFrame = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
+            clipChildren = true
         }
-        root.addView(previewFrame, LinearLayout.LayoutParams(-1, 0, 1f))
+        screen.addView(previewFrame, FrameLayout.LayoutParams(-1, -1))
 
-        val panel = LinearLayout(this).apply {
+        root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            background = rounded(Color.rgb(5, 16, 32), cyan, 25)
-            setPadding(dp(10), dp(10), dp(10), dp(12))
+            setPadding(dp(margin), dp(margin), dp(margin), dp(margin))
+        }
+        screen.addView(root, FrameLayout.LayoutParams(-1, -1))
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(Color.argb(188, 5, 13, 26), cyan, 16)
+            setPadding(dp(8), 0, dp(8), 0)
+        }
+        header.addView(TextView(this).apply {
+            text = "Mouse Hole  •  YUYV"
+            setTextColor(cyan)
+            setTypeface(null, Typeface.BOLD)
+            textSize = if (landscape) 13f else 19f
+            maxLines = 1
+        }, LinearLayout.LayoutParams(0, -1, 1f))
+        refreshButton = smallButton("↻  Refresh") { scheduleReconnect(150L) }.apply {
+            textSize = if (landscape) 10f else 11f
+        }
+        header.addView(refreshButton, LinearLayout.LayoutParams(dp(if (landscape) 80 else 96), dp(headerHeight - 7)))
+        header.addView(smallButton("⚙") { showTools() }, LinearLayout.LayoutParams(dp(if (landscape) 40 else 48), dp(headerHeight - 7)).apply {
+            marginStart = dp(5)
+        })
+        root.addView(header, LinearLayout.LayoutParams(-1, dp(headerHeight)))
+
+        status = TextView(this).apply {
+            text = "USB disconnected  •  ${modeDescription()}"
+            setTextColor(Color.WHITE)
+            textSize = if (landscape) 10f else 12f
+            maxLines = 2
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(Color.argb(176, 5, 13, 26), radius = 9)
+            setPadding(dp(8), 0, dp(8), 0)
+        }
+        root.addView(status, LinearLayout.LayoutParams(-1, dp(if (landscape) 23 else 32)).apply {
+            topMargin = dp(3)
+        })
+
+        // This flexible spacer keeps controls on the bottom without shrinking the video surface.
+        root.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
+
+        controlsPanel = LinearLayout(this).apply {
+            orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = rounded(Color.argb(202, 5, 16, 32), cyan, 18)
+            setPadding(dp(if (landscape) 7 else 10), dp(if (landscape) 4 else 9),
+                dp(if (landscape) 7 else 10), dp(if (landscape) 4 else 9))
         }
         val tabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        val photoTab = smallButton("▣  Photo") {
+        val photoTab = smallButton("Photo") {
             if (!recording) { videoMode = false; refreshShutter() }
         }
-        recordButton = smallButton("▣  Video") {
+        recordButton = smallButton("Video") {
             if (!recording) { videoMode = true; refreshShutter() }
         }
-        val galleryTab = smallButton("▧  Gallery") { openGallery() }
+        val galleryTab = smallButton("Gallery") { openGallery() }
         for (tab in listOf(photoTab, recordButton, galleryTab)) {
-            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(49), 1f).apply {
-                marginStart = dp(3); marginEnd = dp(3)
+            tab.textSize = if (landscape) 10f else 11f
+            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(tabHeight), 1f).apply {
+                marginStart = dp(2); marginEnd = dp(2)
             })
         }
-        panel.addView(tabs)
+        if (landscape) {
+            controlsPanel.addView(tabs, LinearLayout.LayoutParams(0, dp(tabHeight), 1f))
+        } else {
+            controlsPanel.addView(tabs, LinearLayout.LayoutParams(-1, dp(tabHeight)))
+        }
         shutterButton = Button(this).apply {
             isAllCaps = false
-            textSize = 18f
+            textSize = if (landscape) 12f else 17f
             setTypeface(null, Typeface.BOLD)
             minHeight = 0
             minimumHeight = 0
+            minWidth = 0
+            minimumWidth = 0
             setOnClickListener { if (recording || videoMode) toggleRecord() else capturePhoto() }
         }
-        panel.addView(shutterButton, LinearLayout.LayoutParams(dp(138), dp(74)).apply {
-            topMargin = dp(12)
-        })
-        root.addView(panel, LinearLayout.LayoutParams(-1, dp(162)).apply {
-            topMargin = dp(8)
-        })
+        if (landscape) {
+            controlsPanel.addView(shutterButton, LinearLayout.LayoutParams(dp(shutterWidth), dp(shutterHeight)).apply {
+                marginStart = dp(8)
+            })
+            root.addView(controlsPanel, LinearLayout.LayoutParams(-1, dp(53)))
+        } else {
+            controlsPanel.addView(shutterButton, LinearLayout.LayoutParams(dp(shutterWidth), dp(shutterHeight)).apply {
+                topMargin = dp(7)
+            })
+            root.addView(controlsPanel, LinearLayout.LayoutParams(-1, dp(143)))
+        }
         refreshShutter()
-        return root
+        return screen
     }
     override fun getCameraView(): IAspectRatio? = preview
     override fun getCameraViewContainer(): ViewGroup? = previewFrame
@@ -284,7 +372,9 @@ class MainActivity : CameraActivity() {
         }
     }
     override fun getCameraRequest(): CameraRequest {
-        val (w, h, format) = modes[modeIndex]
+        val w = 640
+        val h = 480
+        val format = CameraRequest.PreviewFormat.FORMAT_YUYV
         Log.i("MouseHoleUVC", "Opening requested mode ${modeDescription()}")
         return CameraRequest.Builder()
         .setPreviewWidth(w).setPreviewHeight(h)
@@ -340,6 +430,15 @@ class MainActivity : CameraActivity() {
         showDetails("USB devices", if(list.isEmpty()) "No USB devices detected" else list.joinToString("\n") { "VID ${it.vendorId} PID ${it.productId} ${it.deviceName}" })
     }
     private fun toast(s:String)=Toast.makeText(this,s,Toast.LENGTH_SHORT).show()
+    override fun onDestroy() {
+        activityStopping = true
+        reconnectHandler.removeCallbacks(reconnectAction)
+        if (receiverRegistered) {
+            try { unregisterReceiver(usbEvents) } catch (_: IllegalArgumentException) { }
+            receiverRegistered = false
+        }
+        super.onDestroy()
+    }
     override fun onPause() {
         if(recording) { captureVideoStop();recording=false;timerHandler.removeCallbacks(ticker);refreshShutter() }
         super.onPause()
