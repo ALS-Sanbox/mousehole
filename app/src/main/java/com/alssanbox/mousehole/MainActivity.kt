@@ -147,7 +147,7 @@ class MainActivity : CameraActivity() {
 
     private fun showTools() {
         val items = arrayOf(
-            "USB devices", "Reported preview sizes", "Change camera mode (\${modeDescription()})",
+            "USB devices", "Reported preview sizes", "Change camera mode (${modeDescription()})",
             "Microphone information"
         )
         AlertDialog.Builder(this)
@@ -219,7 +219,7 @@ class MainActivity : CameraActivity() {
         root.addView(header)
 
         status = TextView(this).apply {
-            text = "USB disconnected  •  \${modeDescription()}"
+            text = "USB disconnected  •  ${modeDescription()}"
             setTextColor(Color.rgb(180, 210, 231))
             textSize = 12f
             maxLines = 2
@@ -333,11 +333,11 @@ class MainActivity : CameraActivity() {
     }
     private fun showSizes() {
         val sizes = getAllPreviewSizes()
-        status.text = if (sizes.isNullOrEmpty()) "Camera has not reported resolutions" else sizes.joinToString("\n") { it.toString() }
+        showDetails("Reported preview sizes", if (sizes.isNullOrEmpty()) "Camera has not reported resolutions" else sizes.joinToString("\n") { it.toString() })
     }
     private fun showUsbDevices() {
         val list=(getSystemService(USB_SERVICE) as UsbManager).deviceList.values
-        status.text=if(list.isEmpty()) "No USB devices detected" else list.joinToString("\n") { "VID ${it.vendorId} PID ${it.productId} ${it.deviceName}" }
+        showDetails("USB devices", if(list.isEmpty()) "No USB devices detected" else list.joinToString("\n") { "VID ${it.vendorId} PID ${it.productId} ${it.deviceName}" })
     }
     private fun toast(s:String)=Toast.makeText(this,s,Toast.LENGTH_SHORT).show()
     override fun onPause() {
