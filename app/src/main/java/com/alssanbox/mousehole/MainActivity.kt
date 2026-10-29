@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.content.res.Configuration
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.SystemClock
 import android.view.MotionEvent
@@ -82,10 +83,10 @@ class MainActivity : CameraActivity() {
         if (!::preview.isInitialized || !::previewFrame.isInitialized) return
         preview.post {
             if (preview.width <= 0 || preview.height <= 0 || previewFrame.width <= 0 || previewFrame.height <= 0) return@post
-            val scale = maxOf(
-                previewFrame.width.toFloat() / preview.width,
-                previewFrame.height.toFloat() / preview.height
-            ) * zoomLevel
+            val ratioX = previewFrame.width.toFloat() / preview.width
+            val ratioY = previewFrame.height.toFloat() / preview.height
+            val scale = (if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT)
+                minOf(ratioX, ratioY) else maxOf(ratioX, ratioY)) * zoomLevel
             preview.pivotX = preview.width / 2f
             preview.pivotY = preview.height / 2f
             preview.scaleX = scale
@@ -112,27 +113,15 @@ class MainActivity : CameraActivity() {
     private var recording = false
     private var currentVideo: File? = null
     // The supplied endoscope works in YUYV; never request an unsupported MJPEG mode.
-    private val highQuality: Boolean
-        get() = getSharedPreferences("camera", MODE_PRIVATE).getBoolean("tryHdYuyv", false)
-    private fun modeDescription() = if (highQuality) "1280x720 YUYV (trial)" else "640x480 YUYV"
-    private fun tryHigherQuality() {
-        if (recording) { toast("Stop recording before changing resolution"); return }
-        val sizes = getAllPreviewSizes()
-        val hasHD = sizes?.any { it.toString().contains("1280") && it.toString().contains("720") } == true
-        if (!hasHD) {
-            showDetails("YUYV resolution", "1280×720 is not in the reported sizes. Keeping tested 640×480 YUYV.")
-            return
-        }
-        AlertDialog.Builder(this).setTitle("Experimental HD YUYV")
-            .setMessage("The camera reports 1280×720, but this may only work with MJPEG. Try HD YUYV? If it fails, the app returns to 640×480.")
-            .setPositiveButton("Try HD") { _, _ ->
-                getSharedPreferences("camera", MODE_PRIVATE).edit().putBoolean("tryHdYuyv", true).apply()
-                scheduleReconnect(200L)
-            }.setNegativeButton("Cancel", null).show()
-    }
-    private fun useStableQuality() {
-        getSharedPreferences("camera", MODE_PRIVATE).edit().putBoolean("tryHdYuyv", false).apply()
-        scheduleReconnect(200L)
+    private fun modeDescription() = "640x480 YUYV"
+    private val orientationPrefs by lazy { getSharedPreferences("display", MODE_PRIVATE) }
+    private val portraitUi: Boolean get() = orientationPrefs.getBoolean("portraitUi", false)
+    private fun switchUiOrientation() {
+        if (recording) { toast("Stop recording before changing layout"); return }
+        val newPortrait = !portraitUi
+        orientationPrefs.edit().putBoolean("portraitUi", newPortrait).apply()
+        requestedOrientation = if (newPortrait) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
     }
     private val usbManager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private var receiverRegistered = false
@@ -231,6 +220,11 @@ class MainActivity : CameraActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        getSharedPreferences("camera", MODE_PRIVATE).edit().remove("tryHdYuyv").apply()
+        val requested = if (portraitUi) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        val actualPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+        if (actualPortrait != portraitUi) requestedOrientation = requested
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         immersive()
         val filter = IntentFilter().apply {
@@ -263,7 +257,7 @@ class MainActivity : CameraActivity() {
     private fun showTools() {
         val items = arrayOf(
             "USB devices", "Reported preview sizes", "Reconnect camera",
-            "Try higher YUYV resolution", "Use stable 640×480 YUYV", "Microphone information"
+            "Switch portrait / landscape UI", "Microphone information"
         )
         AlertDialog.Builder(this)
             .setTitle("Mouse Hole • Camera tools")
@@ -272,9 +266,8 @@ class MainActivity : CameraActivity() {
                     0 -> showUsbDevices()
                     1 -> showSizes()
                     2 -> scheduleReconnect(200L)
-                    3 -> tryHigherQuality()
-                    4 -> useStableQuality()
-                    5 -> showDetails("Microphone", "Optional audio requires microphone permission before connecting the camera. Without it, MP4 recording is silent.")
+                    3 -> switchUiOrientation()
+                    4 -> showDetails("Microphone", "Optional audio requires microphone permission before connecting the camera. Without it, MP4 recording is silent.")
                 }
             }
             .setNegativeButton("Close", null)
@@ -317,6 +310,7 @@ class MainActivity : CameraActivity() {
 
 
     override fun getRootView(layoutInflater: LayoutInflater): View {
+        val isPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
         val screen = FrameLayout(this).apply { setBackgroundColor(Color.BLACK); clipChildren = true }
         preview = AspectRatioTextureView(this)
         previewFrame = FrameLayout(this).apply {
@@ -330,7 +324,7 @@ class MainActivity : CameraActivity() {
 
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(6), dp(10), dp(7))
+            setPadding(dp(if (isPortrait) 12 else 10), dp(6), dp(if (isPortrait) 12 else 10), dp(7))
             setOnClickListener { toggleOverlay() }
         }
         screen.addView(root, FrameLayout.LayoutParams(-1, -1))
@@ -355,7 +349,9 @@ class MainActivity : CameraActivity() {
             gravity = Gravity.CENTER
             setPadding(dp(8), 0, dp(8), 0)
         }
-        header.addView(status, LinearLayout.LayoutParams(0, dp(31), 1.1f))
+        header.addView(status, LinearLayout.LayoutParams(0, dp(31), if (isPortrait) 1.0f else 1.1f))
+        header.addView(smallButton(if (isPortrait) "↔" else "↕") { switchUiOrientation() },
+            LinearLayout.LayoutParams(dp(42), dp(38)).apply { marginStart = dp(5) })
         header.addView(smallButton("↻") { scheduleReconnect(150L) },
             LinearLayout.LayoutParams(dp(44), dp(38)).apply { marginStart = dp(6) })
         header.addView(smallButton("⚙") { showTools() },
@@ -386,7 +382,12 @@ class MainActivity : CameraActivity() {
                 marginStart = dp(2); marginEnd = dp(2)
             })
         }
-        bottom.addView(tabs, LinearLayout.LayoutParams(0, dp(42), 1.2f))
+        if (isPortrait) {
+            bottom.orientation = LinearLayout.VERTICAL
+            bottom.addView(tabs, LinearLayout.LayoutParams(-1, dp(46)))
+        } else {
+            bottom.addView(tabs, LinearLayout.LayoutParams(0, dp(42), 1.2f))
+        }
         val zoomStrip = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             background = rounded(Color.argb(205, 5, 13, 26), cyan, 20)
@@ -400,7 +401,10 @@ class MainActivity : CameraActivity() {
         }
         zoomStrip.addView(zoomText, LinearLayout.LayoutParams(dp(42), dp(35)))
         zoomStrip.addView(smallButton("+") { changeZoom(0.25f) }, LinearLayout.LayoutParams(dp(34), dp(35)))
-        bottom.addView(zoomStrip, LinearLayout.LayoutParams(-2, dp(38)).apply { marginStart = dp(8) })
+        bottom.addView(zoomStrip, LinearLayout.LayoutParams(-2, dp(38)).apply {
+            marginStart = if (isPortrait) 0 else dp(8)
+            topMargin = if (isPortrait) dp(7) else 0
+        })
         shutterButton = Button(this).apply {
             isAllCaps = false
             textSize = 12f
@@ -411,9 +415,12 @@ class MainActivity : CameraActivity() {
                 if (recording || videoMode) toggleRecord() else capturePhoto()
             }
         }
-        bottom.addView(shutterButton, LinearLayout.LayoutParams(dp(95), dp(44)).apply { marginStart = dp(9) })
+        bottom.addView(shutterButton, LinearLayout.LayoutParams(dp(if (isPortrait) 130 else 95), dp(if (isPortrait) 56 else 44)).apply {
+            marginStart = if (isPortrait) 0 else dp(9)
+            topMargin = if (isPortrait) dp(7) else 0
+        })
         controlsPanel = bottom
-        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(56)))
+        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(if (isPortrait) 174 else 56)))
         refreshShutter()
         showOverlay()
         return screen
@@ -426,17 +433,12 @@ class MainActivity : CameraActivity() {
         runOnUiThread {
             if (!::status.isInitialized) return@runOnUiThread
             status.text = "${modeDescription()} • USB: $code ${msg ?: ""}"
-            if (highQuality && (code.toString().contains("ERROR", true) || code.toString().contains("CLOSED", true))) {
-                getSharedPreferences("camera", MODE_PRIVATE).edit().putBoolean("tryHdYuyv", false).apply()
-                scheduleReconnect(500L)
-            } else if (code.toString().contains("OPENED", true)) {
-                applyPreviewCrop()
-            }
+            if (code.toString().contains("OPENED", true)) applyPreviewCrop()
         }
     }
     override fun getCameraRequest(): CameraRequest {
-        val w = if (highQuality) 1280 else 640
-        val h = if (highQuality) 720 else 480
+        val w = 640
+        val h = 480
         val format = CameraRequest.PreviewFormat.FORMAT_YUYV
         Log.i("MouseHoleUVC", "Opening requested mode ${modeDescription()}")
         return CameraRequest.Builder()
