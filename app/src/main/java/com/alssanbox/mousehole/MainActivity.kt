@@ -221,6 +221,10 @@ class MainActivity : CameraActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         getSharedPreferences("camera", MODE_PRIVATE).edit().remove("tryHdYuyv").apply()
+        val requested = if (portraitUi) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        val actualPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+        if (actualPortrait != portraitUi) requestedOrientation = requested
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         immersive()
         val filter = IntentFilter().apply {
