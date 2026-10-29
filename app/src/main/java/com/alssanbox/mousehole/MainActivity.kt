@@ -2,6 +2,16 @@ package com.alssanbox.mousehole
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.Intent
+import android.app.AlertDialog
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.view.WindowManager
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbManager
 import android.os.Bundle
@@ -34,6 +44,18 @@ class MainActivity : CameraActivity() {
     private lateinit var preview: AspectRatioTextureView
     private lateinit var status: TextView
     private lateinit var recordButton: Button
+    private lateinit var shutterButton: Button
+    private var videoMode = false
+    private val timerHandler = Handler(Looper.getMainLooper())
+    private var recordStartedAt = 0L
+    private val ticker = object : Runnable {
+        override fun run() {
+            if (!recording) return
+            val secs = (android.os.SystemClock.elapsedRealtime() - recordStartedAt) / 1000
+            status.text = "● REC  %02d:%02d  •  %s".format(secs / 60, secs % 60, modeDescription())
+            timerHandler.postDelayed(this, 1000)
+        }
+    }
     private var recording = false
     private var currentVideo: File? = null
     private val modes = listOf(
@@ -74,31 +96,182 @@ class MainActivity : CameraActivity() {
         }
     }
 
+
+    private val navy = Color.rgb(5, 13, 26)
+    private val cyan = Color.rgb(0, 190, 255)
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
+
+    private fun rounded(color: Int, stroke: Int = Color.TRANSPARENT, radius: Int = 18): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+            if (stroke != Color.TRANSPARENT) setStroke(dp(1), stroke)
+        }
+
+    private fun immersive() {
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) immersive()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        immersive()
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 1)
         }
     }
+
+    private fun smallButton(label: String, action: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            textSize = 11f
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = rounded(Color.rgb(13, 29, 49), cyan, 15)
+            setPadding(dp(5), 0, dp(5), 0)
+            minHeight = 0
+            minimumHeight = 0
+            minWidth = 0
+            minimumWidth = 0
+            setOnClickListener { action() }
+        }
+
+    private fun showTools() {
+        val items = arrayOf(
+            "USB devices", "Reported preview sizes", "Change camera mode (\${modeDescription()})",
+            "Microphone information"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Mouse Hole • Camera tools")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showUsbDevices()
+                    1 -> showSizes()
+                    2 -> nextMode()
+                    3 -> showDetails("Microphone", "Optional audio requires microphone permission before connecting the camera. Without it, MP4 recording is silent.")
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showDetails(title: String, details: String) {
+        AlertDialog.Builder(this).setTitle(title).setMessage(details)
+            .setPositiveButton("OK", null).show()
+    }
+
+    private fun capturePhoto() {
+        if (isCameraOpened()) captureImage(callback, outputFile(false).absolutePath)
+        else toast("Connect a USB camera first")
+    }
+
+    private fun refreshShutter() {
+        if (!::shutterButton.isInitialized) return
+        shutterButton.text = if (recording) "■ STOP" else if (videoMode) "● REC" else "● PHOTO"
+        shutterButton.setTextColor(if (recording) Color.WHITE else if (videoMode) Color.rgb(255, 85, 90) else navy)
+        shutterButton.background = rounded(
+            if (recording) Color.rgb(202, 35, 55) else Color.WHITE,
+            if (videoMode) Color.rgb(255, 69, 84) else cyan, 35
+        )
+        if (::recordButton.isInitialized) {
+            recordButton.background = rounded(if (videoMode) Color.rgb(0, 61, 95) else Color.rgb(13, 29, 49),
+                if (videoMode) cyan else Color.TRANSPARENT)
+        }
+    }
+
+    private fun openGallery() {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "image/*")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try { startActivity(intent) }
+        catch (e: Exception) { toast("No gallery app available") }
+    }
+
     override fun getRootView(layoutInflater: LayoutInflater): View {
-        root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xff101216.toInt()) }
-        status = TextView(this).apply { text = "Mode: ${modeDescription()} — connect USB-C endoscope"; setTextColor(-1); setPadding(18,18,18,18) }
-        root.addView(status)
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(navy)
+            // Insets are handled by immersive transient bars; controls stay in the app's layout.
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(TextView(this).apply {
+            text = "Mouse Hole"
+            setTextColor(cyan)
+            setTypeface(null, Typeface.BOLD)
+            textSize = 23f
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(smallButton("⚙  TOOLS") { showTools() },
+            LinearLayout.LayoutParams(dp(100), dp(42)))
+        root.addView(header)
+
+        status = TextView(this).apply {
+            text = "USB disconnected  •  \${modeDescription()}"
+            setTextColor(Color.rgb(180, 210, 231))
+            textSize = 12f
+            maxLines = 2
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), 0, dp(4), dp(5))
+        }
+        root.addView(status, LinearLayout.LayoutParams(-1, dp(39)))
+
         preview = AspectRatioTextureView(this)
-        previewFrame = FrameLayout(this)
-        root.addView(previewFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        val controls = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
-        fun btn(text: String, action: () -> Unit): Button = Button(this).apply { this.text = text; setOnClickListener { action() }; controls.addView(this) }
-        btn("PHOTO") { if (isCameraOpened()) captureImage(callback, outputFile(false).absolutePath) else toast("Connect a camera first") }
-        recordButton = btn("RECORD") { toggleRecord() }
-        btn("USB INFO") { showUsbDevices() }
-        btn("SIZES") { showSizes() }
-        root.addView(controls)
-        // Keep the diagnostic mode control visible on narrower devices such as the Galaxy A16.
-        root.addView(Button(this).apply {
-            text = "CHANGE CAMERA MODE (${modeDescription()})"
-            setOnClickListener { nextMode() }
+        previewFrame = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+        }
+        root.addView(previewFrame, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            background = rounded(Color.rgb(5, 16, 32), cyan, 25)
+            setPadding(dp(10), dp(10), dp(10), dp(12))
+        }
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        val photoTab = smallButton("▣  Photo") {
+            if (!recording) { videoMode = false; refreshShutter() }
+        }
+        recordButton = smallButton("▣  Video") {
+            if (!recording) { videoMode = true; refreshShutter() }
+        }
+        val galleryTab = smallButton("▧  Gallery") { openGallery() }
+        for (tab in listOf(photoTab, recordButton, galleryTab)) {
+            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(49), 1f).apply {
+                marginStart = dp(3); marginEnd = dp(3)
+            })
+        }
+        panel.addView(tabs)
+        shutterButton = Button(this).apply {
+            isAllCaps = false
+            textSize = 18f
+            setTypeface(null, Typeface.BOLD)
+            minHeight = 0
+            minimumHeight = 0
+            setOnClickListener { if (recording || videoMode) toggleRecord() else capturePhoto() }
+        }
+        panel.addView(shutterButton, LinearLayout.LayoutParams(dp(138), dp(74)).apply {
+            topMargin = dp(12)
         })
+        root.addView(panel, LinearLayout.LayoutParams(-1, dp(162)).apply {
+            topMargin = dp(8)
+        })
+        refreshShutter()
         return root
     }
     override fun getCameraView(): IAspectRatio? = preview
@@ -124,7 +297,7 @@ class MainActivity : CameraActivity() {
     }
     private fun toggleRecord() {
         if (recording) {
-            captureVideoStop(); recording = false; recordButton.text = "RECORD"
+            captureVideoStop(); recording = false; timerHandler.removeCallbacks(ticker); refreshShutter()
             status.text = "Finishing MP4..."
         } else {
             if (!isCameraOpened()) { toast("No USB camera open"); return }
@@ -134,7 +307,7 @@ class MainActivity : CameraActivity() {
             }
             currentVideo = outputFile(true)
             captureVideoStart(callback, currentVideo!!.absolutePath)
-            recording = true; recordButton.text = "STOP"; status.text = "Recording"
+            recording = true; recordStartedAt = android.os.SystemClock.elapsedRealtime(); refreshShutter(); timerHandler.post(ticker)
         }
     }
     private fun outputFile(video:Boolean): File {
@@ -168,7 +341,7 @@ class MainActivity : CameraActivity() {
     }
     private fun toast(s:String)=Toast.makeText(this,s,Toast.LENGTH_SHORT).show()
     override fun onPause() {
-        if(recording) { captureVideoStop();recording=false;recordButton.text="RECORD" }
+        if(recording) { captureVideoStop();recording=false;timerHandler.removeCallbacks(ticker);refreshShutter() }
         super.onPause()
     }
 }
