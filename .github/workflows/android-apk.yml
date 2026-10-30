@@ -41,6 +41,24 @@ jobs:
           gradle-version: '8.11.1'
 
 
+      - name: Configure persistent signing when secrets exist
+        env:
+          KEYSTORE_B64: ${{ secrets.MOUSEHOLE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.MOUSEHOLE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.MOUSEHOLE_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.MOUSEHOLE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [[ -n "$KEYSTORE_B64" && -n "$KEYSTORE_PASS" && -n "$KEY_ALIAS" && -n "$KEY_PASS" ]]; then
+            printf "%s" "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/mousehole-signing.jks"
+            echo "MOUSEHOLE_KEYSTORE_PATH=$RUNNER_TEMP/mousehole-signing.jks" >> "$GITHUB_ENV"
+            echo "MOUSEHOLE_KEYSTORE_PASSWORD=$KEYSTORE_PASS" >> "$GITHUB_ENV"
+            echo "MOUSEHOLE_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "MOUSEHOLE_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+            echo "Persistent APK signing enabled."
+          else
+            echo "::warning::Persistent signing secrets absent. See SIGNING_UPDATES.md. This debug APK may require uninstall."
+          fi
       - name: Build debug APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
