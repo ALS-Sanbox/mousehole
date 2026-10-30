@@ -16,7 +16,7 @@ import android.graphics.Color
 import android.content.res.ColorStateList
 import android.view.ScaleGestureDetector
 import android.widget.ImageButton
-import android.graphics.drawable.GradientDrawable.OVAL
+
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -55,10 +55,8 @@ class MainActivity : CameraActivity() {
     private lateinit var previewFrame: FrameLayout
     private lateinit var preview: AspectRatioTextureView
     private lateinit var status: TextView
-    private lateinit var recordButton: Button
     private lateinit var controlsPanel: LinearLayout
     private lateinit var controlRail: LinearLayout
-    private lateinit var refreshButton: Button
     private lateinit var shutterButton: ImageButton
     private lateinit var photoButton: ImageButton
     private lateinit var videoButton: ImageButton
@@ -105,7 +103,6 @@ class MainActivity : CameraActivity() {
     private val uiHandler = Handler(Looper.getMainLooper())
     private var uiVisible = true
     private var zoomLevel = 1.0f
-    private var zoomText: TextView? = null
     private val hideUiRunnable = Runnable {
         if (!isFinishing && !isDestroyed && ::root.isInitialized) {
             root.visibility = View.GONE
@@ -125,6 +122,7 @@ class MainActivity : CameraActivity() {
         if (uiVisible) {
             uiHandler.removeCallbacks(hideUiRunnable)
             root.visibility = View.GONE
+            if (::controlRail.isInitialized) controlRail.visibility = View.GONE
             uiVisible = false
         } else showOverlay()
     }
@@ -151,7 +149,6 @@ class MainActivity : CameraActivity() {
     }
     private fun changeZoom(delta: Float) {
         zoomLevel = (zoomLevel + delta).coerceIn(1f, 3f)
-        zoomText?.text = "%.1fx".format(zoomLevel)
         applyPreviewCrop()
         showOverlay()
     }
@@ -343,9 +340,8 @@ class MainActivity : CameraActivity() {
     private fun refreshShutter() {
         if (!::shutterButton.isInitialized) return
         val red = Color.rgb(238, 61, 75)
-        val activeColor = if (recording || videoMode) red else Color.WHITE
         shutterButton.background = GradientDrawable().apply {
-            shape = OVAL
+            shape = GradientDrawable.OVAL
             setColor(if (recording) red else Color.WHITE)
             setStroke(dp(3), cyan)
         }
