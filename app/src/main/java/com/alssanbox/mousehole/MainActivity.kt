@@ -13,6 +13,10 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.app.AlertDialog
 import android.graphics.Color
+import android.content.res.ColorStateList
+import android.view.ScaleGestureDetector
+import android.widget.ImageButton
+import android.graphics.drawable.GradientDrawable.OVAL
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -53,8 +57,51 @@ class MainActivity : CameraActivity() {
     private lateinit var status: TextView
     private lateinit var recordButton: Button
     private lateinit var controlsPanel: LinearLayout
+    private lateinit var controlRail: LinearLayout
     private lateinit var refreshButton: Button
-    private lateinit var shutterButton: Button
+    private lateinit var shutterButton: ImageButton
+    private lateinit var photoButton: ImageButton
+    private lateinit var videoButton: ImageButton
+    private var mirrorHorizontal = false
+    private var mirrorVertical = false
+    private var previewRotation = 0
+    private var didScaleGesture = false
+    private val pinchDetector by lazy {
+        ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                didScaleGesture = true
+                zoomLevel = (zoomLevel * detector.scaleFactor).coerceIn(1f, 4f)
+                applyPreviewCrop()
+                showOverlay()
+                return true
+            }
+        })
+    }
+    private fun rotatePreview() {
+        previewRotation = (previewRotation + 90) % 360
+        applyPreviewCrop()
+        showOverlay()
+    }
+    private fun flipPreview() {
+        mirrorHorizontal = !mirrorHorizontal
+        applyPreviewCrop()
+        showOverlay()
+    }
+    private fun flipPreviewVertical() {
+        mirrorVertical = !mirrorVertical
+        applyPreviewCrop()
+        showOverlay()
+    }
+    private fun iconButton(icon: Int, hint: String, action: () -> Unit): ImageButton =
+        ImageButton(this).apply {
+            setImageResource(icon)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            contentDescription = hint
+            background = rounded(Color.argb(194, 5, 17, 33), cyan, 15)
+            scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(9), dp(9), dp(9), dp(9))
+            setOnClickListener { showOverlay(); action() }
+        }
     private val uiHandler = Handler(Looper.getMainLooper())
     private var uiVisible = true
     private var zoomLevel = 1.0f
@@ -62,12 +109,14 @@ class MainActivity : CameraActivity() {
     private val hideUiRunnable = Runnable {
         if (!isFinishing && !isDestroyed && ::root.isInitialized) {
             root.visibility = View.GONE
+            if (::controlRail.isInitialized) controlRail.visibility = View.GONE
             uiVisible = false
         }
     }
     private fun showOverlay() {
         if (!::root.isInitialized) return
         root.visibility = View.VISIBLE
+        if (::controlRail.isInitialized) controlRail.visibility = View.VISIBLE
         uiVisible = true
         uiHandler.removeCallbacks(hideUiRunnable)
         uiHandler.postDelayed(hideUiRunnable, 4500L)
@@ -85,12 +134,19 @@ class MainActivity : CameraActivity() {
             if (preview.width <= 0 || preview.height <= 0 || previewFrame.width <= 0 || previewFrame.height <= 0) return@post
             val ratioX = previewFrame.width.toFloat() / preview.width
             val ratioY = previewFrame.height.toFloat() / preview.height
+            // Rotation changes the visible bounding box: swap width and height at 90/270.
+            val quarterTurn = previewRotation % 180 != 0
+            val displayedWidth = if (quarterTurn) preview.height.toFloat() else preview.width.toFloat()
+            val displayedHeight = if (quarterTurn) preview.width.toFloat() else preview.height.toFloat()
+            val ratioRotX = previewFrame.width.toFloat() / displayedWidth
+            val ratioRotY = previewFrame.height.toFloat() / displayedHeight
             val scale = (if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT)
-                minOf(ratioX, ratioY) else maxOf(ratioX, ratioY)) * zoomLevel
+                minOf(ratioRotX, ratioRotY) else maxOf(ratioRotX, ratioRotY)) * zoomLevel
             preview.pivotX = preview.width / 2f
             preview.pivotY = preview.height / 2f
-            preview.scaleX = scale
-            preview.scaleY = scale
+            preview.rotation = previewRotation.toFloat()
+            preview.scaleX = scale * (if (mirrorHorizontal) -1f else 1f)
+            preview.scaleY = scale * (if (mirrorVertical) -1f else 1f)
         }
     }
     private fun changeZoom(delta: Float) {
@@ -286,14 +342,28 @@ class MainActivity : CameraActivity() {
 
     private fun refreshShutter() {
         if (!::shutterButton.isInitialized) return
-        shutterButton.text = if (recording) "■ STOP" else if (videoMode) "● REC" else "● PHOTO"
-        shutterButton.setTextColor(if (recording) Color.WHITE else if (videoMode) Color.rgb(255, 85, 90) else navy)
-        shutterButton.background = rounded(
-            if (recording) Color.rgb(202, 35, 55) else Color.WHITE,
-            if (videoMode) Color.rgb(255, 69, 84) else cyan, 35
+        val red = Color.rgb(238, 61, 75)
+        val activeColor = if (recording || videoMode) red else Color.WHITE
+        shutterButton.background = GradientDrawable().apply {
+            shape = OVAL
+            setColor(if (recording) red else Color.WHITE)
+            setStroke(dp(3), cyan)
+        }
+        shutterButton.setImageResource(
+            if (recording) android.R.drawable.ic_media_pause
+            else if (videoMode) android.R.drawable.presence_video_online
+            else android.R.drawable.ic_menu_camera
         )
-        if (::recordButton.isInitialized) {
-            recordButton.background = rounded(if (videoMode) Color.rgb(0, 61, 95) else Color.rgb(13, 29, 49),
+        shutterButton.imageTintList = ColorStateList.valueOf(if (recording) Color.WHITE else if (videoMode) red else navy)
+        shutterButton.contentDescription = if (recording) "Stop video recording" else if (videoMode) "Start video recording" else "Take photo"
+        if (::photoButton.isInitialized) {
+            photoButton.background = rounded(
+                if (!videoMode) Color.argb(232, 4, 70, 105) else Color.argb(194, 5, 17, 33),
+                if (!videoMode) cyan else Color.TRANSPARENT)
+        }
+        if (::videoButton.isInitialized) {
+            videoButton.background = rounded(
+                if (videoMode) Color.argb(232, 4, 70, 105) else Color.argb(194, 5, 17, 33),
                 if (videoMode) cyan else Color.TRANSPARENT)
         }
     }
@@ -329,98 +399,103 @@ class MainActivity : CameraActivity() {
         }
         screen.addView(root, FrameLayout.LayoutParams(-1, -1))
 
+        // Let a single touch reveal/hide the UI, or two fingers pinch to zoom.
+        preview.setOnTouchListener { view, event ->
+            pinchDetector.onTouchEvent(event)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { didScaleGesture = false; true }
+                MotionEvent.ACTION_POINTER_DOWN -> { didScaleGesture = true; true }
+                MotionEvent.ACTION_UP -> {
+                    if (!didScaleGesture) toggleOverlay()
+                    view.performClick()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> true
+                else -> true
+            }
+        }
+
         val header = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
         }
         header.addView(TextView(this).apply {
             text = "Mouse Hole"
-            textSize = 17f
+            textSize = if (isPortrait) 15f else 17f
             setTextColor(cyan)
             setTypeface(null, Typeface.BOLD)
             setShadowLayer(4f, 0f, 2f, Color.BLACK)
-        }, LinearLayout.LayoutParams(0, dp(40), 1f))
+        }, LinearLayout.LayoutParams(0, dp(39), 1f))
         status = TextView(this).apply {
             text = "USB • ${modeDescription()}"
             maxLines = 1
             textSize = 10f
             setTextColor(Color.WHITE)
-            background = rounded(Color.argb(170, 5, 13, 26), radius = 13)
+            background = rounded(Color.argb(170, 5, 13, 26), radius = 12)
             gravity = Gravity.CENTER
-            setPadding(dp(8), 0, dp(8), 0)
+            setPadding(dp(6), 0, dp(6), 0)
         }
-        header.addView(status, LinearLayout.LayoutParams(0, dp(31), if (isPortrait) 1.0f else 1.1f))
-        header.addView(smallButton(if (isPortrait) "↔" else "↕") { switchUiOrientation() },
-            LinearLayout.LayoutParams(dp(42), dp(38)).apply { marginStart = dp(5) })
-        header.addView(smallButton("↻") { scheduleReconnect(150L) },
-            LinearLayout.LayoutParams(dp(44), dp(38)).apply { marginStart = dp(6) })
-        header.addView(smallButton("⚙") { showTools() },
-            LinearLayout.LayoutParams(dp(44), dp(38)).apply { marginStart = dp(6) })
-        root.addView(header, LinearLayout.LayoutParams(-1, dp(42)))
+        header.addView(status, LinearLayout.LayoutParams(0, dp(30), 1.2f))
+        root.addView(header, LinearLayout.LayoutParams(-1, dp(40)))
         root.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
 
+        // Small vertical icon rail keeps camera controls off the picture.
+        val rail = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            background = rounded(Color.argb(100, 5, 13, 26), radius = 18)
+        }
+        fun railItem(icon: Int, hint: String, action: () -> Unit) {
+            rail.addView(iconButton(icon, hint, action),
+                LinearLayout.LayoutParams(dp(42), dp(42)).apply { bottomMargin = dp(5) })
+        }
+        railItem(android.R.drawable.ic_menu_rotate, "Rotate preview 90 degrees") { rotatePreview() }
+        railItem(android.R.drawable.ic_menu_revert, "Flip preview left to right") { flipPreview() }
+        railItem(android.R.drawable.ic_menu_sort_by_size, "Flip preview top to bottom") { flipPreviewVertical() }
+        railItem(android.R.drawable.ic_menu_crop, "Change portrait or landscape controls") { switchUiOrientation() }
+        railItem(android.R.drawable.ic_menu_gallery, "Open gallery") { openGallery() }
+        railItem(android.R.drawable.ic_popup_sync, "Reconnect USB camera") { scheduleReconnect(150L) }
+        railItem(android.R.drawable.ic_menu_manage, "USB and camera settings") { showTools() }
+        // An independent rail overlay floats at the screen edge, never consuming preview layout.
+        screen.addView(rail, FrameLayout.LayoutParams(dp(48), -2,
+            Gravity.END or Gravity.CENTER_VERTICAL).apply { rightMargin = dp(8) })
+        // Rail is part of the controls: hide and reveal it together with the header and shutter.
+        controlRail = rail
+
         val bottom = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(9), dp(5), dp(9), dp(5))
-            background = rounded(Color.argb(165, 5, 13, 26), cyan, 25)
+            background = rounded(Color.argb(150, 5, 13, 26), radius = 28)
+            setPadding(dp(7), dp(5), dp(7), dp(5))
         }
-        val tabs = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            orientation = LinearLayout.HORIZONTAL
-        }
-        val photoTab = smallButton("◉ Photo") {
+        val controlSize = if (isPortrait) 55 else 46
+        val shutterSize = if (isPortrait) 76 else 58
+        photoButton = iconButton(android.R.drawable.ic_menu_camera, "Photo mode") {
             if (!recording) { videoMode = false; refreshShutter() }
         }
-        recordButton = smallButton("▣ Video") {
+        videoButton = iconButton(android.R.drawable.presence_video_online, "Video mode") {
             if (!recording) { videoMode = true; refreshShutter() }
         }
-        val galleryTab = smallButton("▧ Gallery") { openGallery() }
-        for (tab in listOf(photoTab, recordButton, galleryTab)) {
-            tab.textSize = 11f
-            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(39), 1f).apply {
-                marginStart = dp(2); marginEnd = dp(2)
-            })
-        }
-        if (isPortrait) {
-            bottom.orientation = LinearLayout.VERTICAL
-            bottom.addView(tabs, LinearLayout.LayoutParams(-1, dp(46)))
-        } else {
-            bottom.addView(tabs, LinearLayout.LayoutParams(0, dp(42), 1.2f))
-        }
-        val zoomStrip = LinearLayout(this).apply {
-            gravity = Gravity.CENTER
-            background = rounded(Color.argb(205, 5, 13, 26), cyan, 20)
-        }
-        zoomStrip.addView(smallButton("−") { changeZoom(-0.25f) }, LinearLayout.LayoutParams(dp(34), dp(35)))
-        zoomText = TextView(this).apply {
-            text = "1.0x"
-            setTextColor(Color.WHITE)
-            textSize = 12f
-            gravity = Gravity.CENTER
-        }
-        zoomStrip.addView(zoomText, LinearLayout.LayoutParams(dp(42), dp(35)))
-        zoomStrip.addView(smallButton("+") { changeZoom(0.25f) }, LinearLayout.LayoutParams(dp(34), dp(35)))
-        bottom.addView(zoomStrip, LinearLayout.LayoutParams(-2, dp(38)).apply {
-            marginStart = if (isPortrait) 0 else dp(8)
-            topMargin = if (isPortrait) dp(7) else 0
-        })
-        shutterButton = Button(this).apply {
-            isAllCaps = false
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0
+        shutterButton = ImageButton(this).apply {
+            scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(15), dp(15), dp(15), dp(15))
             setOnClickListener {
                 showOverlay()
                 if (recording || videoMode) toggleRecord() else capturePhoto()
             }
         }
-        bottom.addView(shutterButton, LinearLayout.LayoutParams(dp(if (isPortrait) 130 else 95), dp(if (isPortrait) 56 else 44)).apply {
-            marginStart = if (isPortrait) 0 else dp(9)
-            topMargin = if (isPortrait) dp(7) else 0
+        bottom.addView(photoButton, LinearLayout.LayoutParams(dp(controlSize), dp(controlSize)))
+        bottom.addView(shutterButton, LinearLayout.LayoutParams(dp(shutterSize), dp(shutterSize)).apply {
+            marginStart = dp(if (isPortrait) 18 else 22)
+            marginEnd = dp(if (isPortrait) 18 else 22)
         })
+        bottom.addView(videoButton, LinearLayout.LayoutParams(dp(controlSize), dp(controlSize)))
         controlsPanel = bottom
-        root.addView(bottom, LinearLayout.LayoutParams(-1, dp(if (isPortrait) 174 else 56)))
+        val bottomHeight = shutterSize + 12
+        root.addView(bottom, LinearLayout.LayoutParams(-2, dp(bottomHeight)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+        })
         refreshShutter()
         showOverlay()
         return screen
