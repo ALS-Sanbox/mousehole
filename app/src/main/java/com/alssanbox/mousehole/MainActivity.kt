@@ -310,7 +310,7 @@ class MainActivity : CameraActivity() {
     private fun showTools() {
         val items = arrayOf(
             "USB devices", "Reported preview sizes", "Reconnect camera",
-            "Switch portrait / landscape UI", "Microphone information"
+            "Switch portrait / landscape UI", "Microphone information", "About Mouse Hole"
         )
         AlertDialog.Builder(this)
             .setTitle("Mouse Hole • Camera tools")
@@ -321,10 +321,22 @@ class MainActivity : CameraActivity() {
                     2 -> scheduleReconnect(200L)
                     3 -> switchUiOrientation()
                     4 -> showDetails("Microphone", "Optional audio requires microphone permission before connecting the camera. Without it, MP4 recording is silent.")
+                    5 -> showAbout()
                 }
             }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    private fun showAbout() {
+        val version = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "Unknown" } catch (_: Exception) { "Unknown" }
+        AlertDialog.Builder(this)
+            .setTitle("About Mouse Hole")
+            .setMessage("Mouse Hole — USB Endoscope Camera\n\nVersion: $version\n\nDeveloped by Afro Lion Studios, LLC\nCreated with the assistance of artificial intelligence (AI).\n\nOpen-source project:\nhttps://github.com/ALS-Sanbox/mousehole\n\nCamera access and capture work locally. No account or Wi-Fi required.")
+            .setPositiveButton("Close", null)
+            .setNeutralButton("GitHub") { _, _ ->
+                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/ALS-Sanbox/mousehole")))
+            }.show()
     }
 
     private fun showDetails(title: String, details: String) {
