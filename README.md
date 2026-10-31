@@ -1,64 +1,98 @@
-> **Diagnostic preview build:** Read [BLACK_PREVIEW_TEST.md](BLACK_PREVIEW_TEST.md) for the new MODE selector and black-preview testing instructions.
+# Mouse Hole 🐭
 
-# Mouse Hole — USB-C Endoscope for Samsung Galaxy S23
+**USB-C endoscope camera app for Android**
 
-![Mouse Hole app icon — mouse and illuminated inspection camera](mouse-hole-logo.png)
+![Mouse Hole logo](mouse-hole-logo.png)
 
-**Branding:** The launcher icon uses the text-free Mouse Hole logo provided by the project owner. Android displays **Mouse Hole** as the application label beneath the icon.
+Mouse Hole is an experimental, open-source Android application for viewing and capturing footage from compatible USB Video Class (UVC) endoscope cameras. Developed by **Afro Lion Studios, LLC**, with assistance from artificial intelligence (AI).
 
-**Experimental Android UVC camera app.** Designed for the Samsung Galaxy S23 and a Nimborial USB-C endoscope, assuming the endoscope uses the standard USB Video Class (UVC) interface. The specific camera has **not** been verified.
+No account, Wi-Fi, or cloud service is needed to use the camera.
 
-## Features in this starter
+## Features
 
-- USB-host device authorization via the AUSBC library
-- Live external camera preview; USB diagnostics and reported preview sizes
-- JPEG photos and MP4 video recording
-- Optional phone microphone audio (grant the microphone permission before connecting the camera)
-- Photos in `Pictures/MouseHole` and video in `Movies/MouseHole` using MediaStore
-- No Wi-Fi or account required
+- Live USB camera preview with Android USB-host permission prompts (AUSBC library)
+- Full-screen immersive preview with auto-hiding controls; tap to show or hide them
+- Pinch-to-zoom, 90° preview rotation, horizontal and vertical flips
+- Portrait or landscape control layout
+- Photo mode, video mode, and central shutter button
+- JPEG photos and MP4 video; optional phone microphone audio
+- USB device diagnostics, reported preview sizes, and manual reconnection
+- Automatic reconnection handling after USB unplug/replug
+- MediaStore gallery copies under `Pictures/MouseHole` and `Movies/MouseHole`
+- In-app About dialog with version and studio credit
 
-The preview is initially requested at **1280 × 720**. 2K is **not** guaranteed; supported resolutions depend on the attached endoscope and may require code changes. The app does not implement dual-lens switching, LED brightness adjustment or automated resolution selection yet. This is an **untested prototype**, not a production release.
+## Compatibility
 
-## Build an APK with GitHub Actions (no Android Studio required)
+- Android 8.0+ (minSdk 26) with USB-host support and a compatible UVC USB camera
+- USB-C endoscope or an appropriate USB OTG adapter
+- The currently configured camera request is **640 × 480 YUYV**. Do not assume that 720p, 2K, MJPEG, or every UVC device works.
+- Developed around a Nimborial USB-C endoscope; compatibility with other devices is not guaranteed.
 
-1. Open your GitHub repository: https://github.com/ALS-Sanbox/mousehole
-2. Download and extract the latest `MouseHole_Kotlin_2_2_Fix.zip` file. Its contents include `app`, `.github`, `build.gradle.kts`, and `settings.gradle.kts`.
-3. Upload **the contents**, not the enclosing directory, to the repository using **Add file → Upload files**. GitHub's web uploader may not preserve empty folders; this is fine. Make sure `.github/workflows/android-apk.yml` exists in the uploaded repository. If the web uploader ignores dot-prefixed paths, use GitHub's **Create new file** with the exact name `.github/workflows/android-apk.yml` and paste the YAML from the ZIP.
-4. Commit the changes to the `main` branch. The workflow should run automatically on push. Or visit **Actions → Build Mouse Hole APK → Run workflow**.
-5. Open **Actions**, select the newest workflow run and inspect the **Build debug APK** step. A green check means the APK compiled.
-6. At the bottom of a successful workflow run, under **Artifacts**, download **MouseHole-S23-debug-APK**. Unzip this GitHub artifact and copy `app-debug.apk` onto your Galaxy S23.
-7. On the phone, open the APK in **My Files** and approve Android's "Allow from this source" installation prompt for the app you used to open it. Turn that setting back off afterward if desired.
-8. Launch **Mouse Hole**, grant the camera permission and optionally microphone permission; plug in the endoscope and approve the USB access prompt.
+## Install from GitHub Actions
 
-**Note:** The workflow creates a *debug-signed* APK, appropriate for private testing. GitHub Actions runs the build on GitHub's hosted runner. It does not publish to the Play Store. The APK is downloadable from the successful workflow run, not directly from the repo's Code tab.
+1. Open [Actions](https://github.com/ALS-Sanbox/mousehole/actions) and select the Android APK build workflow.
+2. Choose a successful run (or use **Run workflow**, if enabled).
+3. Download the APK artifact from the run's **Artifacts** section and extract the ZIP if necessary.
+4. Transfer the APK to your Android phone and open it using the phone's file manager.
+5. Allow installation from that source when Android asks. You may disable that permission afterward.
+6. Launch **Mouse Hole**, allow camera access, then connect the USB endoscope and approve its USB permission request.
+7. For recording with audio, grant microphone permission **before connecting** the camera.
+
+**Updating:** Install newer builds over the existing app only when the application ID and signing certificate match and the new version code is higher. GitHub Actions debug signing may change between runners; persistent signing is required for reliable in-place upgrades. Back up any important captures before reinstalling.
+
+## Using the app
+
+- **Photo icon:** select photo mode; tap the central shutter to save a JPEG.
+- **Video icon:** select video mode; tap the central shutter to start/stop MP4 recording.
+- **Pinch:** zoom the live preview. **Tap preview:** reveal/hide the overlay.
+- **Side controls:** rotate 90°, flip horizontally/vertically, switch UI orientation, open gallery, reconnect camera, or open camera tools.
+- **Settings / camera tools → About Mouse Hole:** see version, studio attribution, and GitHub link.
+- The overlay automatically hides after a few seconds; tap to reveal it again.
+
+Photos are copied to **Pictures/MouseHole** and videos to **Movies/MouseHole** through Android MediaStore. App-private capture files may also exist. Storage behavior can vary if saving fails.
+
+## Build from source
+
+Requirements: JDK 17, Android SDK Platform 36, Android Gradle Plugin 8.10.1, Gradle 8.11.1, Kotlin 2.2.10, and internet access for build dependencies.
+
+```bash
+gradle :app:assembleDebug
+```
+
+Output: `app/build/outputs/apk/debug/app-debug.apk`. Alternatively, push to GitHub and use the configured workflow. The repository's workflow and Gradle files are the source of truth for current build configuration.
 
 ## Troubleshooting
 
-- **Build failed — dependency unavailable:** The starter relies on `com.github.ernestp.AndroidUSBCamera:libausbc:master-SNAPSHOT` from JitPack. This is a moving third-party snapshot. Check the Actions log for resolution or source incompatibility; a fixed, tested release dependency or vendored library may be required. **A successful APK build is not guaranteed by this ZIP.**
-- **App installs but camera stays black:** Check USB INFO for a VID/PID. Ensure the phone supports USB host (Galaxy S23 does); try replugging and granting USB permission. The probe must expose UVC; some cameras use proprietary USB protocols. Try a known-working UVC viewer to distinguish camera/USB compatibility from app issues.
-- **No microphone audio:** Enable Microphone permission in Android Settings → Apps → Mouse Hole → Permissions, then fully close/reopen the app and reconnect the USB camera before recording.
-- **No 2K:** Check SIZES; camera advertisements are not proof of available USB stream modes. This prototype defaults to 720p.
-- **Photos/videos missing:** Look in Gallery, `Pictures/MouseHole`, or `Movies/MouseHole`. App-private originals may remain if the Gallery copy fails.
-- **Action never ran:** Check repository Settings → Actions → General for workflow permissions and verify that the YAML file is on the `main` branch under `.github/workflows/`.
+| Problem | What to try |
+| --- | --- |
+| No image / black preview | Confirm the camera supports UVC and YUYV; approve USB access; disconnect/reconnect; inspect USB devices and reported sizes in camera tools. |
+| Camera disconnected | Replug the camera and use the reconnect icon if automatic reconnection fails. |
+| Video has no sound | Grant microphone permission in Android settings **before connecting** the camera, then reconnect. Silent video is supported. |
+| No HD preview | The app requests 640×480 YUYV; higher advertised resolutions may not stream reliably. |
+| Can't install update | Check signing certificate and version code. A differently signed APK may require uninstalling the old build. |
+| Missing gallery files | Check Pictures/MouseHole and Movies/MouseHole; confirm capture completed. |
+| GitHub build fails | Read the first explicit Gradle error in Actions. AUSBC uses a moving JitPack snapshot, which can break compatibility. |
 
-## Source and licensing
+For additional preview diagnostics see [BLACK_PREVIEW_TEST.md](BLACK_PREVIEW_TEST.md).
 
-The app uses [AUSBC / AndroidUSBCamera](https://github.com/ernestp/AndroidUSBCamera) from JitPack. Review its Apache-2.0 license, notices, and upstream dependencies before redistribution. Camera access is local; no network permission is requested by this app. Gradle/JitPack requires internet **at build time only**.
+## Privacy and permissions
 
-## Build locally (optional)
+- **USB access:** required to communicate with the endoscope.
+- **Camera permission:** requested for camera operation.
+- **Microphone:** optional, for video audio.
+- No account, Wi-Fi, or internet connection is required at runtime; building dependencies requires internet access.
+- Captures are stored on the device. This README does not claim a formal security audit.
 
-Install JDK 17, Android SDK Platform 35 and build tools, and Gradle 8.9. Run `gradle :app:assembleDebug`. The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+## Credits and licensing
 
+**Developed by Afro Lion Studios, LLC.**
 
-## AAR metadata build fix (October 2026)
+**AI disclosure:** This application was created with the assistance of artificial intelligence (AI), with project direction and testing by the developer.
 
-The initial GitHub Actions build failed because androidx.core:core-ktx:1.18.0
-requires Android compile SDK 36 and Android Gradle Plugin 8.9.1 or newer.
-This revision uses AGP 8.10.1, Gradle 8.11.1, compileSdk 36, and installs
-Android SDK Platform 36 in GitHub Actions. targetSdk remains 35.
-This is a configuration correction, not a verified successful APK build.
-If another step fails, download the Actions log and review the first error.
+Repository: https://github.com/ALS-Sanbox/mousehole
 
-## Kotlin compiler alignment (October 2026)
+USB camera integration uses [AUSBC / AndroidUSBCamera](https://github.com/ernestp/AndroidUSBCamera). Review its Apache-2.0 license and notices, plus the licenses of other dependencies. Check for a root LICENSE file before assuming the Mouse Hole source itself has an open-source redistribution license.
 
-The AUSBC `master-SNAPSHOT` binaries currently report Kotlin metadata version 2.2.0. This project now uses Kotlin Gradle Plugin **2.2.10**, alongside Android Gradle Plugin 8.10.1 and Gradle 8.11.1, to correct the metadata mismatch observed in GitHub Actions. If the next run fails at Kotlin compilation, inspect the **first explicit source error**, because there may be separate AUSBC API incompatibilities; this package has not been compiled/tested here.
+## Project status
+
+Active experimental development. Features and device compatibility may change. Contributions and issue reports are welcome through GitHub.
